@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF Editor</title>
+    <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Nunito', sans-serif;
+            background-color: #f5f7fa;
+            margin: 0;
+            padding: 0;
+            color: #333;
+        }
+
+        .container {
+            display: flex;
+            height: 100vh;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+            background-color: #ffffff;
+        }
+
+        #empty-panel,
+        #tool-panel {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+            background: #ffffff;
+            border-right: 1px solid #ececec;
+        }
+
+        #pdf-panel {
+            flex: 3;
+            background: #fff;
+            padding: 20px;
+            overflow-y: auto;
+            overflow-x: hidden;
+            position: relative;
+        }
+
+        canvas {
+            width: 100%;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            border-radius: 4px;
+        }
+
+        button,
+        input[type="file"],
+        input[type="button"] {
+            width: 100%;
+            padding: 12px 20px;
+            margin-top: 10px;
+            border: none;
+            border-radius: 4px;
+            background-color: #007bff;
+            color: white;
+            cursor: pointer;
+            font-size: 16px;
+            transition: all 0.3s;
+        }
+
+        button:hover,
+        input[type="file"]:hover,
+        input[type="button"]:hover {
+            background-color: #0056b3;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.15);
+        }
+
+        input[type="file"] {
+            background-color: #fff;
+            color: #333;
+            cursor: pointer;
+        }
+
+        ul {
+            list-style-type: none;
+            padding: 0;
+            margin: 0;
+        }
+
+        li a {
+            color: #4a4a4a;
+            text-decoration: none;
+            font-size: 16px;
+            padding: 10px 0;
+            display: block;
+            transition: background-color 0.2s;
+        }
+
+        li a:hover {
+            background-color: #f2f2f2;
+            text-decoration: none;
+        }
+
+        .signature-pad {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 1001;
+            background-color: white;
+            border: 2px solid #ccc;
+            padding: 10px;
+            display: none;
+            width: 420px;
+            box-sizing: border-box;
+            border-radius: 8px;
+        }
+
+        .close-button {
+            position: absolute;
+            top: 5px;
+            right: 5px;
+            cursor: pointer;
+            background: #ff5b5b;
+            color: white;
+            border: none;
+            border-radius: 50%;
+            padding: 5px 8px;
+            font-size: 16px;
+            z-index: 1002;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <div id="empty-panel">
+            <ul id="pdf-list">
+                <!-- PDF list will be dynamically filled here -->
+            </ul>
+        </div>
+        <div id="pdf-panel">
+            <canvas id="pdf-canvas"></canvas>
+            <div class="page-controls">Page <span id="current-page">1</span> of <span id="total-pages">1</span></div>
+            <div class="pdf-nav">
+                <button id="prev-page">Previous Page</button>
+                <button id="next-page">Next Page</button>
+            </div>
+        </div>
+        <div id="tool-panel">
+            <input type="file" id="upload-image" accept="image/*">
+            <button id="add-signature">Add Signature</button>
+            <button id="add-text">Add Text</button>
+            <button id="download-pdf">Download PDF</button>
+        </div>
+    </div>
+    <div class="signature-pad" id="signature-pad">
+        <button class="close-button" onclick="toggleSignaturePad(false)">X</button>
+        <canvas id="signature-canvas" width="400" height="200"></canvas>
+        <div class="controls">
+            <button onclick="saveSignature()">Save Signature</button>
+            <button onclick="clearSignature()">Clear</button>
+        </div>
+    </div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.7.570/pdf.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/4.4.0/fabric.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/pdf-lib/dist/pdf-lib.min.js"></script>
+    <script>
+        let originalPdfArrayBuffer = null;
+        let pdfDoc = null;
+        let currentPage = 1;
+        let fabricCanvas = null;
+        let pageObjects = {};
+        let signatureCanvas = null;
+
+        window.onload = async function () {
+            loadPdfList();
+            initializeCanvas();
+        };
+
+        function initializeCanvas() {
+            fabricCanvas = new fabric.Canvas('pdf-canvas', {
+                selection: true,  // Allows selection of objects
+                preserveObjectStacking: true,
+                perPixelTargetFind: true,  // More accurate click selection
+                targetFindTolerance: 4
+            });
+            signatureCanvas = new fabric.Canvas('signature-canvas', {
+                isDrawingMode: true
+            });
+        }
+
+        function loadPdfList() {
+            const pdfs = [
+                { name: "PDF Document 1", url: "/static/pdf/PDF1.pdf" },
+                { name: "PDF Document 2", url: "/static/pdf/PDF2.pdf" },
+                { name: "PDF Document 3", url: "/static/pdf/PDF3.pdf" }
+            ];
+            const listElement = document.getElementById('pdf-list');
+            pdfs.forEach(pdf => {
+                const item = document.createElement('li');
+                const link = document.createElement('a');
+                link.href = '#';
+                link.textContent = pdf.name;
+                link.onclick = function () { loadPdfFromUrl(pdf.url); return false; };
+                item.appendChild(link);
+                listElement.appendChild(item);
+            });
+        }
+
+        async function loadPdfFromUrl(pdfUrl) {
+            const response = await fetch(pdfUrl);
+            originalPdfArrayBuffer = await response.arrayBuffer();
+            pdfDoc = null;
+            currentPage = 1;
+            pageObjects = {};
+            loadPdf(originalPdfArrayBuffer);
+        }
+
+        async function loadPdf(pdfData) {
+            const loadingTask = pdfjsLib.getDocument({ data: pdfData });
+            pdfDoc = await loadingTask.promise;
+            document.getElementById('total-pages').textContent = pdfDoc.numPages;
+            renderPage(currentPage);
+        }
+
+        async function renderPage(num) {
+            const page = await pdfDoc.getPage(num);
+            const viewport = page.getViewport({ scale: 1 });
+            const scale = document.getElementById('pdf-panel').clientWidth / viewport.width;
+            const scaledViewport = page.getViewport({ scale: scale });
+
+            fabricCanvas.clear();
+            fabricCanvas.setWidth(scaledViewport.width);
+            fabricCanvas.setHeight(scaledViewport.height);
+
+            const tempCanvas = document.createElement('canvas');
+            tempCanvas.width = scaledViewport.width;
+            tempCanvas.height = scaledViewport.height;
+            const tempContext = tempCanvas.getContext('2d');
+
+            const renderContext = {
+                canvasContext: tempContext,
+                viewport: scaledViewport
+            };
+
+            await page.render(renderContext).promise;
+
+            const pdfImage = new fabric.Image(tempCanvas, {
+                selectable: false,
+                evented: false,
+            });
+            fabricCanvas.setBackgroundImage(pdfImage, fabricCanvas.renderAll.bind(fabricCanvas), {
+                scaleX: 1,
+                scaleY: 1
+            });
+
+            restorePageState(num);
+            document.getElementById('current-page').textContent = num;
+        }
+
+        document.getElementById('add-text').addEventListener('click', function () {
+            const text = new fabric.IText('Type here...', {
+                left: 100, // Default position
+                top: 100, // Default position
+                fontFamily: 'Arial',
+                fill: '#000000',
+                fontSize: 20,
+                selectable: true,
+                hasBorders: true,
+                hasControls: true,
+                lockRotation: false,
+                lockScalingX: false,
+                lockScalingY: false,
+                lockMovementX: false,
+                lockMovementY: false,
+                editable: true
+            });
+            fabricCanvas.add(text);
+            text.enterEditing();
+            text.selectAll();
+        });
+
+
+        document.getElementById('download-pdf').addEventListener('click', async function () {
+            savePageState();
+            try {
+                const loadedPdfDoc = await PDFLib.PDFDocument.load(originalPdfArrayBuffer);
+                const canvasWidth = fabricCanvas.getWidth();
+                const canvasHeight = fabricCanvas.getHeight();
+
+                const promises = Object.keys(pageObjects).map(async pageNum => {
+                    const pdfPage = loadedPdfDoc.getPages()[parseInt(pageNum) - 1];
+                    const objects = pageObjects[pageNum];
+
+                    for (let obj of objects) {
+                        if (obj.type === 'image' || obj.type === 'path' || obj.type === 'text') {
+                            const imgData = obj.toDataURL();
+                            const image = await loadedPdfDoc.embedPng(imgData);
+                            const scaleRatio = pdfPage.getWidth() / canvasWidth;
+                            const objWidth = obj.scaleX * obj.width;
+                            const objHeight = obj.scaleY * obj.height;
+                            const x = obj.left * scaleRatio;
+                            const y = (pdfPage.getHeight() - (obj.top * scaleRatio + objHeight * scaleRatio));
+
+                            pdfPage.drawImage(image, {
+                                x: x,
+                                y: y,
+                                width: objWidth * scaleRatio,
+                                height: objHeight * scaleRatio
+                            });
+                        }
+                    }
+                });
+
+                await Promise.all(promises);
+                const pdfBytes = await loadedPdfDoc.save();
+                const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+                const link = document.createElement('a');
+                link.href = URL.createObjectURL(blob);
+                link.download = 'modified-document.pdf';
+                link.click();
+            } catch (error) {
+                console.error('Error in PDF creation:', error);
+            }
+        });
+
+        function savePageState() {
+            pageObjects[currentPage] = fabricCanvas.getObjects().map(obj => fabric.util.object.clone(obj));
+        }
+
+        function restorePageState(pageNum) {
+            if (pageObjects[pageNum]) {
+                pageObjects[pageNum].forEach(obj => {
+                    let restoredObject = fabric.util.object.clone(obj);
+                    fabricCanvas.add(restoredObject);
+                });
+            }
+        }
+
+        document.getElementById('prev-page').addEventListener('click', function () {
+            if (currentPage > 1) {
+                savePageState();
+                currentPage--;
+                renderPage(currentPage);
+            }
+        });
+
+        document.getElementById('next-page').addEventListener('click', function () {
+            if (currentPage < pdfDoc.numPages) {
+                savePageState();
+                currentPage++;
+                renderPage(currentPage);
+            }
+        });
+
+        document.getElementById('upload-image').onchange = function (event) {
+            const file = event.target.files[0];
+            const reader = new FileReader();
+            reader.onload = function (e) {
+                fabric.Image.fromURL(e.target.result, function (img) {
+                    img.set({
+                        left: 50,
+                        top: 50,
+                        scaleX: 0.5,
+                        scaleY: 0.5,
+                        selectable: true
+                    });
+                    fabricCanvas.add(img);
+                    fabricCanvas.renderAll();
+                });
+            };
+            reader.readAsDataURL(file);
+        };
+
+        document.getElementById('add-signature').addEventListener('click', function () {
+            toggleSignaturePad(true);
+        });
+
+        function toggleSignaturePad(show) {
+            document.getElementById('signature-pad').style.display = show ? 'block' : 'none';
+        }
+
+        function saveSignature() {
+            signatureCanvas.getObjects().forEach(obj => {
+                const clonedObj = fabric.util.object.clone(obj);
+                fabricCanvas.add(clonedObj);
+                signatureCanvas.clear();
+            });
+            toggleSignaturePad(false);
+        }
+
+        function clearSignature() {
+            signatureCanvas.clear();
+        }
+    </script>
+</body>
+
+</html>
